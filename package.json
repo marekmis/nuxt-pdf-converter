@@ -1,0 +1,24 @@
+{
+  "name": "pdf-to-jpg-converter",
+  "version": "1.0.0",
+  "description": "Convert PDF pages to JPG and combine them vertically with Nuxt 4 UI",
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@nuxt/ui": "^2.18.7",
+    "nuxt": "^3.21.0",
+    "pdf-poppler": "^0.2.1",
+    "sharp": "^0.33.5",
+    "multer": "^1.4.5-lts.1",
+    "@types/multer": "^1.4.12"
+  },
+  "devDependencies": {
+    "@nuxt/devtools": "^1.5.2"
+  }
+}
