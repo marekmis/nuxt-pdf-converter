@@ -12,7 +12,14 @@ export default defineEventHandler(async (event) => {
 
   try {
     const body = await readBody(event);
-    const { filename, mergePages = true, targetWidth = 2000, jpgQuality = 90 } = body;
+    const { filename, originalName, mergePages = true, targetWidth = 2000, jpgQuality = 90 } = body;
+
+    // Derive the clean output base name: use originalName if provided,
+    // otherwise strip the timestamp prefix (e.g. "1234567890_foo.pdf" → "foo")
+    const rawBaseName = originalName
+      ? path.basename(originalName, '.pdf')
+      : path.basename(filename, '.pdf').replace(/^\d+_/, '');
+    const cleanBaseName = rawBaseName.replace(/\s+/g, '-');
 
     if (!filename) {
       throw createError({
@@ -41,7 +48,7 @@ export default defineEventHandler(async (event) => {
     console.log(`Starting conversion for: ${filename} (merge: ${mergePages})`);
 
     // Convert PDF to JPG
-    const result = await convertPdfToJpg(inputPath, outputsDir, mergePages, targetWidth, jpgQuality);
+    const result = await convertPdfToJpg(inputPath, outputsDir, mergePages, targetWidth, jpgQuality, cleanBaseName);
 
     console.log(`Conversion completed:`, result);
 

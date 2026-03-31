@@ -8,8 +8,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 
-export async function convertPdfToJpg(pdfPath: string, outputDir: string, mergePages: boolean = true, targetWidth: number = 2000, jpgQuality: number = 90): Promise<string | string[]> {
-    const pdfName = path.basename(pdfPath, '.pdf');
+export async function convertPdfToJpg(pdfPath: string, outputDir: string, mergePages: boolean = true, targetWidth: number = 2000, jpgQuality: number = 90, outputBaseName?: string): Promise<string | string[]> {
+    const pdfName = outputBaseName ?? path.basename(pdfPath, '.pdf').replace(/\s+/g, '-');
     const tempDir = path.join(outputDir, 'temp_' + Date.now());
 
     console.log(`Processing: ${pdfName}.pdf`);
@@ -117,7 +117,7 @@ export async function convertPdfToJpg(pdfPath: string, outputDir: string, mergeP
         }
 
         // Merge: combine images vertically
-        const outputName = `${pdfName}_converted.jpg`;
+        const outputName = `${pdfName}.jpg`;
         const outputPath = path.join(outputDir, outputName);
 
         let finalImage;
