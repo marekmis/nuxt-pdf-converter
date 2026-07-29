@@ -6,6 +6,11 @@ export default defineNuxtConfig({
   nitro: {
     experimental: {
       wasm: true
+    },
+    // sharp and pdf-poppler ship native binaries — they must stay external
+    // requires resolved at runtime, never inlined into the server bundle.
+    externals: {
+      external: ['sharp']
     }
   },
   runtimeConfig: {

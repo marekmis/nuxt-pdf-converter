@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import { convertPdfToJpg } from '~/server/utils/converter';
+import { uploadsDir, outputsDir, ensureDir } from '~/server/utils/paths';
 
 export default defineEventHandler(async (event) => {
   if (event.node.req.method !== 'POST') {
@@ -28,8 +29,6 @@ export default defineEventHandler(async (event) => {
       });
     }
 
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    const outputsDir = path.join(process.cwd(), 'public', 'outputs');
     const inputPath = path.join(uploadsDir, filename);
 
     // Check if input file exists
@@ -41,9 +40,7 @@ export default defineEventHandler(async (event) => {
     }
 
     // Create outputs directory if it doesn't exist
-    if (!fs.existsSync(outputsDir)) {
-      fs.mkdirSync(outputsDir, { recursive: true });
-    }
+    ensureDir(outputsDir);
 
     console.log(`Starting conversion for: ${filename} (merge: ${mergePages})`);
 

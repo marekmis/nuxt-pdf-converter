@@ -1,12 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import sharp from 'sharp';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+import { pdftoppmPath } from './paths';
 
 export async function convertPdfToJpg(pdfPath: string, outputDir: string, mergePages: boolean = true, targetWidth: number = 2000, jpgQuality: number = 90, outputBaseName?: string): Promise<string | string[]> {
     const pdfName = outputBaseName ?? path.basename(pdfPath, '.pdf').replace(/\s+/g, '-');
@@ -24,24 +20,19 @@ export async function convertPdfToJpg(pdfPath: string, outputDir: string, mergeP
     try {
         const pdfFullPath = path.resolve(pdfPath);
         const outputPrefix = path.join(tempDir, 'page');
-        
-        // Path to pdftoppm executable in pdf-poppler package
-        const pdftoppmPath = path.join(
-            process.cwd(), 
-            'node_modules', 
-            'pdf-poppler', 
-            'lib', 
-            'win', 
-            'poppler-0.51', 
-            'bin', 
-            'pdftoppm.exe'
-        );
-        
+
+        if (!fs.existsSync(pdftoppmPath)) {
+            throw new Error(`pdftoppm not found at ${pdftoppmPath}`);
+        }
+
         console.log(`Converting with ${DPI_FOR_TARGET} DPI...`);
-        
+
         // Run pdftoppm directly with explicit DPI
-        const command = `"${pdftoppmPath}" -png -r ${DPI_FOR_TARGET} "${pdfFullPath}" "${outputPrefix}"`;
-        execSync(command, { stdio: 'inherit' });
+        execFileSync(
+            pdftoppmPath,
+            ['-png', '-r', String(DPI_FOR_TARGET), pdfFullPath, outputPrefix],
+            { stdio: 'inherit' }
+        );
 
         // Get all generated page images
         const files = fs.readdirSync(tempDir)

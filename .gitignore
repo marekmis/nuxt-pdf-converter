@@ -1,6 +1,10 @@
 # Nuxt dev/build outputs
 .output
 .data
+
+# Electron packaging output
+release
+
 .nuxt
 .nitro
 .cache

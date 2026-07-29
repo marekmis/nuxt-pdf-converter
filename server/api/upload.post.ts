@@ -3,6 +3,7 @@ import { pipeline } from 'stream';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
+import { uploadsDir, ensureDir } from '~/server/utils/paths';
 
 const streamPipeline = promisify(pipeline);
 
@@ -34,10 +35,7 @@ export default defineEventHandler(async (event) => {
     }
 
     // Create uploads directory if it doesn't exist
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
+    ensureDir(uploadsDir);
 
     // Generate unique filename
     const timestamp = Date.now();

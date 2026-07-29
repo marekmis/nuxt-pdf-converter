@@ -1,0 +1,51 @@
+appId: com.lineten.pdftojpg
+productName: PDF to JPG Converter
+
+directories:
+  output: release
+
+# Nothing shipped in this app needs compiling. sharp's binaries are prebuilt
+# Node-API modules, and both sharp and poppler travel via extraResources
+# rather than the app's node_modules. Without this, electron-builder runs
+# node-gyp over Nuxt's transitive native dev deps (e.g. @parcel/watcher) and
+# fails on machines without Visual Studio.
+npmRebuild: false
+
+# Only the Electron shell goes into app.asar. Every runtime dependency the
+# server needs is already traced into .output/server/node_modules.
+files:
+  - electron/**/*
+  - package.json
+  - '!node_modules/**/*'
+
+extraResources:
+  # The built Nitro server, kept outside the asar so its native .node files
+  # (sharp) can be loaded normally.
+  - from: .output
+    to: app-server
+  # pdftoppm.exe plus the DLLs it loads from its own directory.
+  - from: node_modules/pdf-poppler/lib/win/poppler-0.51/bin
+    to: poppler/bin
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Skips electron-builder's winCodeSign toolchain (signtool + rcedit).
+  # We have no signing certificate, and extracting that toolchain needs
+  # symlink privilege (Windows Developer Mode or an elevated shell) because
+  # the archive contains macOS .dylib symlinks. Cost of skipping: the exe
+  # keeps Electron's default icon and no embedded version metadata.
+  # To get a custom icon or real signing, enable Developer Mode, set this
+  # back to true, and add an `icon:` entry.
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Per-user install: no admin rights needed, and the data dir is per-user anyway.
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: PDF to JPG Converter

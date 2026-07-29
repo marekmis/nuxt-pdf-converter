@@ -156,9 +156,17 @@
                 <UIcon name="i-heroicons-check" class="h-8 w-8 text-green-600" />
               </div>
               <h3 class="text-lg font-medium text-gray-900 mb-2">
-                Conversion Complete!
+                {{ desktop && !unsavedFiles.length ? 'Saved!' : 'Conversion Complete!' }}
               </h3>
-              <p class="text-sm text-gray-600 mb-6">
+              <p v-if="desktop && !unsavedFiles.length" class="text-sm text-gray-600 mb-6">
+                {{ downloadFiles.length }} file{{ downloadFiles.length > 1 ? 's' : '' }} saved
+                <template v-if="savedFolder">to <span class="font-mono text-xs">{{ savedFolder }}</span></template>
+                <template v-else>next to their source PDFs</template>
+              </p>
+              <p v-else-if="desktop" class="text-sm text-gray-600 mb-6">
+                {{ unsavedFiles.length }} of {{ downloadFiles.length }} file{{ downloadFiles.length > 1 ? 's' : '' }} still need a location
+              </p>
+              <p v-else class="text-sm text-gray-600 mb-6">
                 {{ downloadFiles.length }} file{{ downloadFiles.length > 1 ? 's' : '' }} ready for download
               </p>
             </div>
@@ -167,15 +175,48 @@
               <div class="space-y-2">
                 <div
                   v-for="file in downloadFiles"
-                  :key="file.downloadUrl"
-                  class="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                  :key="file.filename"
+                  class="flex items-center justify-between p-3 bg-gray-50 rounded-lg gap-3"
                 >
-                  <div class="flex items-center space-x-3">
-                    <UIcon name="i-heroicons-photo" class="h-6 w-6 text-primary-500" />
-                    <span class="text-sm font-medium text-gray-900">{{ file.filename }}</span>
+                  <div class="flex items-center space-x-3 min-w-0">
+                    <UIcon name="i-heroicons-photo" class="h-6 w-6 text-primary-500 shrink-0" />
+                    <div class="text-left min-w-0">
+                      <p class="text-sm font-medium text-gray-900 truncate">{{ file.filename }}</p>
+                      <p v-if="file.savedPath" class="text-xs text-gray-500 truncate" :title="file.savedPath">
+                        {{ dirNameOf(file.savedPath) }}
+                      </p>
+                      <p v-else-if="file.saveError" class="text-xs text-red-600">
+                        {{ file.saveError }}
+                      </p>
+                    </div>
                   </div>
+
+                  <!-- Desktop: reveal the saved file, or pick a location if it couldn't be saved -->
                   <UButton
+                    v-if="desktop && file.savedPath"
                     size="sm"
+                    color="gray"
+                    variant="ghost"
+                    class="shrink-0"
+                    @click="reveal(file)"
+                  >
+                    <UIcon name="i-heroicons-folder-open" class="mr-1" />
+                    Show in folder
+                  </UButton>
+                  <UButton
+                    v-else-if="desktop"
+                    size="sm"
+                    class="shrink-0"
+                    @click="saveAs([file])"
+                  >
+                    <UIcon name="i-heroicons-arrow-down-tray" class="mr-1" />
+                    Save as…
+                  </UButton>
+                  <!-- Browser: ordinary download link -->
+                  <UButton
+                    v-else
+                    size="sm"
+                    class="shrink-0"
                     :to="file.downloadUrl"
                     external
                     target="_blank"
@@ -188,7 +229,16 @@
 
               <div class="pt-4 flex flex-col sm:flex-row gap-3 justify-center">
                 <UButton
-                  v-if="downloadFiles.length > 1"
+                  v-if="desktop && unsavedFiles.length > 1"
+                  size="lg"
+                  @click="saveAs(unsavedFiles)"
+                  class="px-8 py-3"
+                >
+                  <UIcon name="i-heroicons-arrow-down-tray" class="mr-2" />
+                  Save All…
+                </UButton>
+                <UButton
+                  v-else-if="!desktop && downloadFiles.length > 1"
                   size="lg"
                   @click="downloadAll"
                   class="px-8 py-3"
@@ -236,10 +286,46 @@ useHead({
   ]
 })
 
+/** Bridge exposed by electron/preload.cjs — absent in a plain browser. */
+interface PdfcDesktop {
+  isDesktop: true
+  getPathForFile(file: File): string | null
+  saveOutputs(items: { filename: string; targetDir: string | null }[]): Promise<SaveResult>
+  saveOutputsAs(items: { filename: string }[]): Promise<SaveResult & { canceled: boolean }>
+  showInFolder(filePath: string): Promise<boolean>
+}
+interface SaveResult {
+  saved: { filename: string; path: string }[]
+  failed: { filename: string; error: string }[]
+}
+declare global {
+  interface Window { pdfcDesktop?: PdfcDesktop }
+}
+
+interface ResultFile {
+  filename: string
+  downloadUrl: string
+  sourceDir: string | null
+  savedPath?: string
+  saveError?: string
+}
+
+// True only when running inside the Electron shell. Set on mount so SSR and
+// the browser build render the plain download UI.
+const desktop = ref(false)
+
+/** Folder each selected PDF came from, so its output can be written alongside it. */
+const sourceDirs = new WeakMap<File, string>()
+
+const dirNameOf = (p: string): string => {
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'))
+  return i > 0 ? p.slice(0, i) : p
+}
+
 // Reactive state
 const selectedFiles = ref<File[]>([])
 const isProcessing = ref(false)
-const downloadFiles = ref<{ filename: string; downloadUrl: string }[]>([])
+const downloadFiles = ref<ResultFile[]>([])
 const error = ref('')
 const isDragging = ref(false)
 const progress = ref(0)
@@ -264,6 +350,12 @@ const addFiles = (files: FileList) => {
       error.value = `"${file.name}" exceeds the 50MB limit and was skipped`
       continue
     }
+    // Remember where this PDF lives so its JPGs can be saved next to it.
+    const fullPath = window.pdfcDesktop?.getPathForFile(file)
+    if (fullPath) {
+      sourceDirs.set(file, dirNameOf(fullPath))
+    }
+
     newFiles.push(file)
   }
   selectedFiles.value = [...selectedFiles.value, ...newFiles]
@@ -310,11 +402,12 @@ const convertFiles = async () => {
   downloadFiles.value = []
 
   const totalFiles = selectedFiles.value.length
-  const allResults: { filename: string; downloadUrl: string }[] = []
+  const allResults: ResultFile[] = []
 
   try {
     for (let i = 0; i < totalFiles; i++) {
       const file = selectedFiles.value[i]
+      const sourceDir = sourceDirs.get(file) ?? null
       const fileProgress = (i / totalFiles) * 100
       const fileChunk = 100 / totalFiles
 
@@ -346,11 +439,12 @@ const convertFiles = async () => {
 
       // Collect results
       if (convertResponse.files) {
-        allResults.push(...convertResponse.files)
+        allResults.push(...convertResponse.files.map((f: any) => ({ ...f, sourceDir })))
       } else {
         allResults.push({
           filename: convertResponse.outputFilename,
-          downloadUrl: convertResponse.downloadUrl
+          downloadUrl: convertResponse.downloadUrl,
+          sourceDir
         })
       }
 
@@ -358,8 +452,16 @@ const convertFiles = async () => {
     }
 
     progress.value = 100
-    processingMessage.value = 'Conversion complete!'
     downloadFiles.value = allResults
+
+    // In the desktop app, write the images out next to their source PDFs
+    // rather than leaving them for a browser-style download.
+    if (desktop.value) {
+      processingMessage.value = 'Saving...'
+      await saveNextToSource(allResults)
+    }
+
+    processingMessage.value = 'Conversion complete!'
 
     setTimeout(() => {
       isProcessing.value = false
@@ -375,6 +477,61 @@ const convertFiles = async () => {
     isProcessing.value = false
     progress.value = 0
   }
+}
+
+/** Apply a save result back onto the listed files. */
+const applySaveResult = (result: SaveResult) => {
+  for (const ok of result.saved) {
+    const entry = downloadFiles.value.find(f => f.filename === ok.filename)
+    if (entry) {
+      entry.savedPath = ok.path
+      entry.saveError = undefined
+    }
+  }
+  for (const bad of result.failed) {
+    const entry = downloadFiles.value.find(f => f.filename === bad.filename)
+    if (entry) entry.saveError = bad.error
+  }
+}
+
+/** Move each converted image into the folder its source PDF came from. */
+const saveNextToSource = async (results: ResultFile[]) => {
+  if (!window.pdfcDesktop) return
+
+  const items = results.map(r => ({ filename: r.filename, targetDir: r.sourceDir }))
+  try {
+    applySaveResult(await window.pdfcDesktop.saveOutputs(items))
+  } catch (err: any) {
+    for (const r of downloadFiles.value) {
+      r.saveError = err?.message || 'Could not save the file'
+    }
+  }
+}
+
+/** Ask where to put the files that could not be saved automatically. */
+const saveAs = async (files: ResultFile[]) => {
+  if (!window.pdfcDesktop) return
+
+  try {
+    const result = await window.pdfcDesktop.saveOutputsAs(files.map(f => ({ filename: f.filename })))
+    if (result.canceled) return
+    applySaveResult(result)
+  } catch (err: any) {
+    error.value = err?.message || 'Could not save the file'
+  }
+}
+
+const unsavedFiles = computed(() => downloadFiles.value.filter(f => !f.savedPath))
+const savedFiles = computed(() => downloadFiles.value.filter(f => f.savedPath))
+
+/** Folder the batch landed in, or null when they went to different places. */
+const savedFolder = computed(() => {
+  const dirs = new Set(savedFiles.value.map(f => dirNameOf(f.savedPath!)))
+  return dirs.size === 1 ? [...dirs][0] : null
+})
+
+const reveal = (file: ResultFile) => {
+  if (file.savedPath) window.pdfcDesktop?.showInFolder(file.savedPath)
 }
 
 const downloadAll = () => {
@@ -401,6 +558,8 @@ const reset = () => {
 
 // Drag and drop event listeners
 onMounted(() => {
+  desktop.value = Boolean(window.pdfcDesktop?.isDesktop)
+
   const handleDragEnter = () => {
     isDragging.value = true
   }
