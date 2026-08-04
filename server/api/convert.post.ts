@@ -1,85 +1,64 @@
-import path from 'path';
-import fs from 'fs';
-import { convertPdfToJpg } from '~/server/utils/converter';
+import { convertPdfToJpg } from '~/server/utils/pdf'
+
+/** Vercel serverless functions reject request bodies above 4.5 MB. */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+
+function toBaseName(filename: string): string {
+  return (
+    filename
+      .replace(/^.*[\\/]/, '') // drop any path the browser may have sent
+      .replace(/\.pdf$/i, '')
+      .replace(/[^\w.\-()]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 120) || 'document'
+  )
+}
+
+function field(parts: Awaited<ReturnType<typeof readMultipartFormData>>, name: string): string | undefined {
+  const part = parts?.find((p) => p.name === name && !p.filename)
+  return part ? part.data.toString('utf8') : undefined
+}
 
 export default defineEventHandler(async (event) => {
-  if (event.node.req.method !== 'POST') {
+  const parts = await readMultipartFormData(event)
+  const file = parts?.find((part) => part.name === 'file' && part.filename)
+
+  if (!file?.filename) {
+    throw createError({ statusCode: 400, statusMessage: 'No file uploaded' })
+  }
+
+  if (!file.filename.toLowerCase().endsWith('.pdf')) {
+    throw createError({ statusCode: 400, statusMessage: 'Invalid file type. Please upload a PDF file.' })
+  }
+
+  if (file.data.length > MAX_UPLOAD_BYTES) {
     throw createError({
-      statusCode: 405,
-      statusMessage: 'Method Not Allowed'
-    });
+      statusCode: 413,
+      statusMessage: `"${file.filename}" is larger than the ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB upload limit`
+    })
   }
 
   try {
-    const body = await readBody(event);
-    const { filename, originalName, mergePages = true, targetWidth = 2000, jpgQuality = 90 } = body;
+    const converted = await convertPdfToJpg(file.data, {
+      mergePages: field(parts, 'mergePages') !== 'false',
+      targetWidth: Number(field(parts, 'targetWidth') ?? 2000),
+      jpgQuality: Number(field(parts, 'jpgQuality') ?? 90),
+      baseName: toBaseName(file.filename)
+    })
 
-    // Derive the clean output base name: use originalName if provided,
-    // otherwise strip the timestamp prefix (e.g. "1234567890_foo.pdf" → "foo")
-    const rawBaseName = originalName
-      ? path.basename(originalName, '.pdf')
-      : path.basename(filename, '.pdf').replace(/^\d+_/, '');
-    const cleanBaseName = rawBaseName.replace(/\s+/g, '-');
-
-    if (!filename) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: 'Filename is required'
-      });
-    }
-
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    const outputsDir = path.join(process.cwd(), 'public', 'outputs');
-    const inputPath = path.join(uploadsDir, filename);
-
-    // Check if input file exists
-    if (!fs.existsSync(inputPath)) {
-      throw createError({
-        statusCode: 404,
-        statusMessage: 'File not found'
-      });
-    }
-
-    // Create outputs directory if it doesn't exist
-    if (!fs.existsSync(outputsDir)) {
-      fs.mkdirSync(outputsDir, { recursive: true });
-    }
-
-    console.log(`Starting conversion for: ${filename} (merge: ${mergePages})`);
-
-    // Convert PDF to JPG
-    const result = await convertPdfToJpg(inputPath, outputsDir, mergePages, targetWidth, jpgQuality, cleanBaseName);
-
-    console.log(`Conversion completed:`, result);
-
-    // Clean up uploaded PDF file
-    fs.unlinkSync(inputPath);
-
-    if (Array.isArray(result)) {
-      // Individual files mode
-      return {
-        success: true,
-        files: result.map(f => ({
-          filename: f,
-          downloadUrl: `/outputs/${f}`
-        })),
-        message: 'Conversion completed successfully'
-      };
-    }
-
-    // Merged mode
     return {
       success: true,
-      outputFilename: result,
-      downloadUrl: `/outputs/${result}`,
-      message: 'Conversion completed successfully'
-    };
-
+      files: converted.map((output) => ({
+        filename: output.filename,
+        // Serverless has no writable public dir, so the image travels in the response.
+        base64: output.data.toString('base64')
+      }))
+    }
   } catch (error) {
-    console.error('Conversion error:', error);
+    console.error('Conversion error:', error)
     throw createError({
       statusCode: 500,
       statusMessage: error instanceof Error ? error.message : 'Conversion failed'
-    });
+    })
   }
-});
+})

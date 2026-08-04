@@ -9,6 +9,16 @@
         <p class="text-lg text-gray-400">
           Convert PDF pages to high-quality JPGs — merged into one image or as individual files
         </p>
+        <UButton
+          size="xs"
+          color="gray"
+          variant="ghost"
+          class="mt-4"
+          @click="logout"
+        >
+          <UIcon name="i-heroicons-arrow-left-on-rectangle" class="mr-1" />
+          Sign out
+        </UButton>
       </div>
 
       <!-- Main Card -->
@@ -44,7 +54,7 @@
                     Drag and drop your PDF files here, or click to browse
                   </p>
                   <p class="text-sm text-gray-500">
-                    Maximum file size: 50MB per file
+                    Maximum file size: {{ maxFileSizeLabel }} per file
                   </p>
                 </div>
 
@@ -177,8 +187,8 @@
                   <UButton
                     size="sm"
                     :to="file.downloadUrl"
+                    :download="file.filename"
                     external
-                    target="_blank"
                   >
                     <UIcon name="i-heroicons-arrow-down-tray" class="mr-1" />
                     Download
@@ -236,6 +246,8 @@ useHead({
   ]
 })
 
+const { maxFileSize } = useRuntimeConfig().public
+
 // Reactive state
 const selectedFiles = ref<File[]>([])
 const isProcessing = ref(false)
@@ -250,6 +262,19 @@ const jpgQuality = ref(90)
 
 const fileInput = ref<HTMLInputElement>()
 
+/** Blob URLs we created and must revoke to avoid leaking memory. */
+const objectUrls: string[] = []
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+const maxFileSizeLabel = computed(() => formatFileSize(maxFileSize))
+
 // Methods
 const addFiles = (files: FileList) => {
   const newFiles: File[] = []
@@ -259,9 +284,8 @@ const addFiles = (files: FileList) => {
       error.value = `"${file.name}" is not a PDF file and was skipped`
       continue
     }
-    const maxSize = 50 * 1024 * 1024
-    if (file.size > maxSize) {
-      error.value = `"${file.name}" exceeds the 50MB limit and was skipped`
+    if (file.size > maxFileSize) {
+      error.value = `"${file.name}" exceeds the ${maxFileSizeLabel.value} limit and was skipped`
       continue
     }
     newFiles.push(file)
@@ -293,12 +317,21 @@ const removeFile = (index: number) => {
   }
 }
 
-const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes'
-  const k = 1024
-  const sizes = ['Bytes', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+/** The server has no writable storage, so images come back inline and become blob URLs here. */
+const base64ToObjectUrl = (base64: string): string => {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }))
+  objectUrls.push(url)
+  return url
+}
+
+const revokeObjectUrls = () => {
+  objectUrls.forEach((url) => URL.revokeObjectURL(url))
+  objectUrls.length = 0
 }
 
 const convertFiles = async () => {
@@ -307,6 +340,7 @@ const convertFiles = async () => {
   isProcessing.value = true
   progress.value = 0
   error.value = ''
+  revokeObjectUrls()
   downloadFiles.value = []
 
   const totalFiles = selectedFiles.value.length
@@ -318,41 +352,25 @@ const convertFiles = async () => {
       const fileProgress = (i / totalFiles) * 100
       const fileChunk = 100 / totalFiles
 
-      processingMessage.value = `Uploading ${file.name} (${i + 1}/${totalFiles})...`
-      progress.value = fileProgress + fileChunk * 0.2
+      processingMessage.value = `Converting ${file.name} (${i + 1}/${totalFiles})...`
+      progress.value = fileProgress + fileChunk * 0.3
 
-      // Upload file
       const formData = new FormData()
       formData.append('file', file)
+      formData.append('mergePages', String(!saveIndividual.value))
+      formData.append('targetWidth', String(targetWidth.value))
+      formData.append('jpgQuality', String(jpgQuality.value))
 
-      const uploadResponse = await $fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      })
+      const response = await $fetch<{
+        files: { filename: string; base64: string }[]
+      }>('/api/convert', { method: 'POST', body: formData })
 
-      processingMessage.value = `Converting ${file.name} (${i + 1}/${totalFiles})...`
-      progress.value = fileProgress + fileChunk * 0.4
-
-      // Convert file
-      const convertResponse = await $fetch('/api/convert', {
-        method: 'POST',
-        body: {
-          filename: uploadResponse.filename,
-          mergePages: !saveIndividual.value,
-          targetWidth: targetWidth.value,
-          jpgQuality: jpgQuality.value
-        }
-      })
-
-      // Collect results
-      if (convertResponse.files) {
-        allResults.push(...convertResponse.files)
-      } else {
-        allResults.push({
-          filename: convertResponse.outputFilename,
-          downloadUrl: convertResponse.downloadUrl
-        })
-      }
+      allResults.push(
+        ...response.files.map((output) => ({
+          filename: output.filename,
+          downloadUrl: base64ToObjectUrl(output.base64)
+        }))
+      )
 
       progress.value = fileProgress + fileChunk
     }
@@ -367,7 +385,14 @@ const convertFiles = async () => {
 
   } catch (err: any) {
     console.error('Conversion error:', err)
-    error.value = err.data?.message || 'An error occurred during conversion'
+
+    if (err.statusCode === 401) {
+      window.location.href = '/login'
+      return
+    }
+
+    error.value =
+      err.statusMessage || err.data?.statusMessage || 'An error occurred during conversion'
     // Keep any results collected so far
     if (allResults.length) {
       downloadFiles.value = allResults
@@ -390,6 +415,7 @@ const downloadAll = () => {
 
 const reset = () => {
   selectedFiles.value = []
+  revokeObjectUrls()
   downloadFiles.value = []
   error.value = ''
   progress.value = 0
@@ -397,6 +423,11 @@ const reset = () => {
   if (fileInput.value) {
     fileInput.value.value = ''
   }
+}
+
+const logout = async () => {
+  await $fetch('/api/auth/logout', { method: 'POST' })
+  window.location.href = '/login'
 }
 
 // Drag and drop event listeners
@@ -419,4 +450,6 @@ onMounted(() => {
     document.removeEventListener('dragleave', handleDragLeave)
   })
 })
+
+onBeforeUnmount(revokeObjectUrls)
 </script>

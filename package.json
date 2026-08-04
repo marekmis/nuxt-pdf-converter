@@ -11,12 +11,10 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "@hyzyla/pdfium": "^2.1.13",
     "@nuxt/ui": "^2.18.7",
     "nuxt": "^3.21.0",
-    "pdf-poppler": "^0.2.1",
-    "sharp": "^0.33.5",
-    "multer": "^1.4.5-lts.1",
-    "@types/multer": "^1.4.12"
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@nuxt/devtools": "^1.5.2"

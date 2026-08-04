@@ -22,11 +22,11 @@ node_modules
 .env.*
 !.env.example
 
-# Uploads and outputs
-public/uploads/*
-!public/uploads/.gitkeep
-public/outputs/*
-!public/outputs/.gitkeep
+# Vercel
+.vercel
+
+# Electron build artifacts
+release/
 
 # Temp files
 temp/
